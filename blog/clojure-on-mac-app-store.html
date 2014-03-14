@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>Clojure on the Mac App Store</title>
+	<link rel="stylesheet" type="text/css" href="../style.css"/>
+</head>
+
+<body>
+	<center>
+		<a href="../">
+			<img src="../moon-light.png" class="logo" />
+		</a>
+	</center>
+
+	<div class="content">
+		<div class="block">
+			<h2>Clojure on the Mac App Store</h2>
+			<p>By <a href="http://oakleaf.info/">Zach Oakes</a> on March 14th, 2014</p>
+			<p>My Clojure IDE, <a href="http://nightcode.info/">Nightcode</a>, is now on the <a href="https://itunes.apple.com/us/app/nightcode/id827505032?ls=1&mt=12">Mac App Store</a>. It remains free and open source, so buying it there is basically a donation. How did I get a Clojure app on the MAS? Armed with a 2007-era Macbook I recently bought from my sister for $100, and a Mac developer membership for the same price, I set out to modify Nightcode to satisfy three requirements:</p>
+			<h3>1. It may not rely on a system-level Java installation.</h3>
+			<p>Being written in Clojure, this may seem like an obvious problem. However, Oracle has already thankfully provided an <a href="http://docs.oracle.com/javase/7/docs/technotes/guides/jweb/packagingAppsForMac.html">official solution</a> by allowing you to bundle a copy of the JRE inside a Mac app bundle. This, of course, adds some weight to the app; Nightcode is a 30MB JAR file, but on the MAS it is a 70MB download, and much larger when on the disk. Although I needed to install Xcode, all the work for creating the bundle, signing the contents, and creating a package was done on the command line.</p>
+			<p>I ran into several "gotchas" during this process. Firstly, digitally signing the app bundle was more difficult than Oracle makes it appear, because each of the JRE dylib files must be signed separately; I found the signing directions on <a href="http://www.intransitione.com/blog/take-java-to-app-store/">this page</a> to be helpful. Secondly, Apple has begun rejecting apps that use QTKit anywhere in their binaries, which unfortunately includes the JRE. Luckily, I was able to solve this by manually deleting a few dylibs from the app bundle:</p>
+<pre>
+find Nightcode.app/Contents/Plugins/ -type f \
+\( -name "libgstplugins-lite.dylib" -or -name "libjfxmedia.dylib" \) \
+-exec rm {} \;
+</pre>
+			<h3>2. It may only access files or folders the user selected in a dialog.</h3>
+			<p>On the face of it, this shouldn't be much of an issue, because Nightcode already works this way. To create or import a project, you must choose a location from a dialog. The initial problem was simply that Apple requires you to use a native OS X dialog, whereas I was using the non-native <a href="http://docs.oracle.com/javase/7/docs/api/javax/swing/JDialog.html">JDialog</a> from Swing. The solution ended up being quite simple: I now use the <a href="http://docs.oracle.com/javase/7/docs/api/java/awt/FileDialog.html">FileDialog</a> from AWT, which conjures up the native dialog for the system you're on.</p>
+			<p>Unfortunately, this wasn't the only problem. Nightcode uses a built-in copy of <a href="https://github.com/technomancy/leiningen">Leiningen</a> to build projects, which by default assumes it has access to ~/.lein as well as ~/.m2 for downloading Maven dependencies. After looking through its source code, I found it determines the <a href="https://github.com/technomancy/leiningen/blob/2.3.4/leiningen-core/src/leiningen/core/user.clj#L19">location of ".lein"</a> from the Java system property "user.home".</p>
+			<p>Knowing that, it wasn't difficult to simply modify this system property when Nightcode boots up to make it point to the special sandboxed home directory instead. From there, I was able to create a config file at "SANDBOX_DIR/.lein/profiles.clj" that told Leiningen to redirect the ".m2" folder there as well. Lastly, I had to make sure to set the "java.io.tmpdir" system property, so temporary files are also created there; by default, they are created somewhere in /private/tmp, which is no good.</p>
+			<h3>3. It must use a special Objective-C API to continue having access to those files and folders after a restart.</h3>
+			<p>Even after all the above work, one final significant problem was that the permissions granted by dialog boxes did not persist after restarting Mac OS X. Upon further reading, I found that one must create a <a href="https://developer.apple.com/library/mac/documentation/Security/Conceptual/AppSandboxDesignGuide/AppSandboxInDepth/AppSandboxInDepth.html#//apple_ref/doc/uid/TP40011183-CH3-SW16">security-scoped bookmark</a> via the <a href="https://developer.apple.com/library/mac/documentation/Cocoa/Reference/Foundation/Classes/NSURL_Class/Reference/Reference.html">NSURL</a> class, save it on the disk somewhere, and then load it each time the app launches.</p>
+			<p>For a short time, I thought that this was a dead end and that all my efforts were wasted. Apple deprecated the Java-Cocoa bridge a very long time ago, so how am I going to call this API from Clojure? After some searching, I came across <a href="https://github.com/shannah/Java-Objective-C-Bridge">a project</a> that implements this functionality as a third-party library; it deserves far more attention than it has received thus far.</p>
+			<p>The bridge required adding a few JAR files and a dylib file to my bundle. The code itself was very awkward to write, especially since I wanted to use reflection so the same code would silently fail on non-Mac OSes. Nonetheless, it ended up being surprisingly concise:</p>
+<pre>
+(defn get-objc-client
+  []
+  (some-> (try (Class/forName "ca.weblite.objc.Client")
+            (catch Exception _))
+          (.getMethod "getInstance" (into-array Class []))
+          (.invoke nil (object-array []))))
+
+(defn base64->nsdata
+  [text]
+  (some-> (get-objc-client)
+          (.sendProxy "NSData" "data" (object-array []))
+          (.send "initWithBase64Encoding:" (object-array [text]))))
+
+(defn write-file-permission!
+  [path]
+  (some-> (get-objc-client)
+          (.sendProxy "NSURL" "fileURLWithPath:" (object-array [path]))
+          (.sendProxy "bookmarkDataWithOptions:includingResourceValuesForKeys:relativeToURL:error:"
+            (object-array [2048 nil nil nil]))
+          (.sendString "base64Encoding" (object-array []))))
+
+(defn read-file-permission!
+  [text]
+  (some-> (get-objc-client)
+          (.sendProxy "NSURL" "URLByResolvingBookmarkData:options:relativeToURL:bookmarkDataIsStale:error:"
+            (object-array [(base64->nsdata text) 1024 nil false nil]))
+          (.send "startAccessingSecurityScopedResource" (object-array []))))
+</pre>
+			<h3>Conclusion</h3>
+			<p>Getting Nightcode on the Mac App Store was more work than I anticipated. Nonetheless, it was a fun technical challenge, and I hope this page helps other Clojurists who find themselves in a similar boat.</p>
+		</div>
+	</div>
+</body>
+
+</html>
