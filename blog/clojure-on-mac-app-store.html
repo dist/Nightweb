@@ -16,7 +16,7 @@
 	<div class="content">
 		<div class="block">
 			<h2>Clojure on the Mac App Store</h2>
-			<p>By <a href="http://oakleaf.info/">Zach Oakes</a> on March 14th, 2014</p>
+			<p>By Zach Oakes on March 14th, 2014</p>
 			<p>My Clojure IDE, <a href="http://nightcode.info/">Nightcode</a>, is now on the <a href="https://itunes.apple.com/us/app/nightcode/id827505032?ls=1&mt=12">Mac App Store</a>. It remains free and open source, so buying it there is basically a donation. How did I get a Clojure app on the MAS? Armed with a 2007-era Macbook I recently bought from my sister for $100, and a Mac developer membership for the same price, I set out to modify Nightcode to satisfy three requirements:</p>
 			<h3>1. It may not rely on a system-level Java installation.</h3>
 			<p>Being written in Clojure, this may seem like an obvious problem. However, Oracle has already thankfully provided an <a href="http://docs.oracle.com/javase/7/docs/technotes/guides/jweb/packagingAppsForMac.html">official solution</a> by allowing you to bundle a copy of the JRE inside a Mac app bundle. This, of course, adds some weight to the app; Nightcode is a 30MB JAR file, but on the MAS it is a 70MB download, and much larger when on the disk. Although I needed to install Xcode, all the work for creating the bundle, signing the contents, and creating a package was done on the command line.</p>
